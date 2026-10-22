@@ -90,3 +90,7 @@ was written on. The originals are kept in `~/.local/state/cosmic-ws-isolate/back
 ```sh
 cargo test     # switching logic + config backup/restore round-trips
 ```
+
+## License
+
+GPL-3.0-only (see [LICENSE](LICENSE)), matching the `cosmic-client-toolkit` library it links against.
