@@ -17,10 +17,7 @@ use cctk::{
         self,
         output::{OutputHandler, OutputState},
         reexports::{
-            calloop::{
-                self,
-                timer::{TimeoutAction, Timer},
-            },
+            calloop,
             calloop_wayland_source::WaylandSource,
         },
         registry::{ProvidesRegistryState, RegistryState},
@@ -64,6 +61,20 @@ struct App {
     switcher: Switcher<String, ObjectId>,
     dirty: bool,
     last_printed: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Action {
+    Activate,
+    Close,
+}
+
+/// One entry of the `list` reply consumed by the launcher plugin.
+#[derive(Serialize, serde::Deserialize, Debug)]
+pub struct ListedWindow {
+    pub id: u32,
+    pub app_id: String,
+    pub title: String,
 }
 
 #[derive(Serialize)]
@@ -208,26 +219,80 @@ impl App {
     }
 
     fn activate(&self, identifier: &str) -> Result<String> {
+        self.act(|t| t.identifier == identifier, Action::Activate)
+    }
+
+    /// Sends one manager request to the window matching `pick`.
+    /// Fresh lookup: only handles cctk still lists (has cosmic info, not closed).
+    fn act(&self, pick: impl Fn(&ToplevelInfo) -> bool, action: Action) -> Result<String> {
         let manager = self
             .toplevel_manager_state
             .as_ref()
             .context("toplevel manager not bound")?;
         let seat = self.seat_state.seats().next().context("no seat")?;
-        // Fresh lookup: only handles cctk still lists (has cosmic info, not closed).
-        let Some(info) = self
-            .toplevel_info_state
-            .toplevels()
-            .find(|t| t.identifier == identifier)
-        else {
+        let Some(info) = self.toplevel_info_state.toplevels().find(|t| pick(t)) else {
             return Ok("ok window already gone".into());
         };
         let Some(handle) = info.cosmic_toplevel.as_ref().filter(|h| h.is_alive()) else {
             return Ok("ok window has no cosmic handle".into());
         };
-        manager.manager.activate(handle, &seat);
+        match action {
+            Action::Activate => manager.manager.activate(handle, &seat),
+            Action::Close => manager.manager.close(handle),
+        }
         self.conn.flush().context("flushing wayland connection")?;
-        debug!("activated {} ({})", info.app_id, info.title);
+        debug!("{action:?} {} ({})", info.app_id, info.title);
         Ok(format!("ok {}", info.app_id))
+    }
+
+    /// Windows for the launcher plugin, least recently used first (the order the stock
+    /// cosmic_toplevel plugin emits; cosmic-launcher reverses it).
+    /// An empty query lists the current workspace; a search lists matching windows everywhere.
+    fn list(&self, query: &str) -> Vec<ListedWindow> {
+        let query = query.to_lowercase();
+        let words: Vec<&str> = query.split_whitespace().collect();
+        let matches = |hay: &str| {
+            let hay = hay.to_lowercase();
+            words.iter().all(|w| hay.contains(w))
+        };
+        let scope: Vec<ExtWorkspaceHandleV1> = if words.is_empty() {
+            // Unknown current workspace (several monitors, nothing focused): visible workspaces.
+            self.current_workspace()
+                .map(|ws| vec![ws])
+                .unwrap_or_else(|| self.active_workspaces())
+        } else {
+            Vec::new()
+        };
+        let windows: Vec<&ToplevelInfo> = self
+            .toplevel_info_state
+            .toplevels()
+            .filter(|t| t.cosmic_toplevel.is_some())
+            .filter(|t| {
+                if words.is_empty() {
+                    t.workspace.iter().any(|w| scope.contains(w))
+                } else {
+                    matches(&t.app_id) || matches(&t.title)
+                }
+            })
+            .collect();
+        let candidates: Vec<Candidate<String>> = windows
+            .iter()
+            .map(|t| Candidate {
+                key: t.identifier.clone(),
+                focused: t.state.contains(&ToplevelState::Activated),
+            })
+            .collect();
+        let mut order = self.switcher.ordered(&candidates);
+        order.reverse();
+        order
+            .iter()
+            .filter_map(|key| windows.iter().find(|t| &t.identifier == key))
+            .map(|t| ListedWindow {
+                id: t.foreign_toplevel.id().protocol_id(),
+                app_id: t.app_id.clone(),
+                title: t.title.clone(),
+            })
+            .collect()
     }
 
     fn handle_request(&mut self, line: &str) -> String {
@@ -235,7 +300,21 @@ impl App {
             "switch next" => self.switch(Direction::Next),
             "switch prev" => self.switch(Direction::Prev),
             "status" => serde_json::to_string(&self.snapshot()).map_err(Into::into),
-            other => Err(anyhow!("unknown command {other:?}")),
+            "list" => serde_json::to_string(&self.list("")).map_err(Into::into),
+            other => {
+                let (cmd, arg) = other.split_once(' ').unwrap_or((other, ""));
+                let id = || arg.parse::<u32>().with_context(|| format!("bad window id {arg:?}"));
+                match cmd {
+                    "list" => serde_json::to_string(&self.list(arg)).map_err(Into::into),
+                    "activate" => id().and_then(|id| {
+                        self.act(|t| t.foreign_toplevel.id().protocol_id() == id, Action::Activate)
+                    }),
+                    "close" => id().and_then(|id| {
+                        self.act(|t| t.foreign_toplevel.id().protocol_id() == id, Action::Close)
+                    }),
+                    _ => Err(anyhow!("unknown command {other:?}")),
+                }
+            }
         };
         result.unwrap_or_else(|err| format!("err {err:#}"))
     }
@@ -264,11 +343,9 @@ fn fmt_window(w: &WindowView) -> String {
 pub struct Options {
     pub mode: Mode,
     pub burst: Duration,
-    /// Called every few seconds in daemon mode (re-applies the Alt+Tab binding if needed).
-    pub on_tick: Option<Box<dyn FnMut()>>,
 }
 
-pub fn run(mut opts: Options) -> Result<()> {
+pub fn run(opts: Options) -> Result<()> {
     let conn = Connection::connect_to_env().context("connecting to the Wayland compositor")?;
     let (globals, event_queue) = registry_queue_init(&conn).context("reading Wayland globals")?;
     let qh = event_queue.handle();
@@ -317,15 +394,6 @@ pub fn run(mut opts: Options) -> Result<()> {
                 }
             })
             .map_err(|e| anyhow!("inserting ipc source: {e}"))?;
-        if let Some(mut tick) = opts.on_tick.take() {
-            tick();
-            handle
-                .insert_source(Timer::from_duration(Duration::from_secs(5)), move |_, _, _| {
-                    tick();
-                    TimeoutAction::ToDuration(Duration::from_secs(5))
-                })
-                .map_err(|e| anyhow!("inserting timer: {e}"))?;
-        }
         info!("daemon ready on {}", crate::ipc::socket_path()?.display());
     }
 

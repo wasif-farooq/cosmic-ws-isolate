@@ -1,6 +1,7 @@
 mod cosmic_cfg;
 mod ipc;
 mod model;
+mod plugin;
 mod wayland;
 
 use anyhow::{Context, Result, bail};
@@ -27,7 +28,8 @@ enum Cmd {
     },
     /// Read-only: print workspaces and windows live. Sends nothing to the compositor.
     Watch,
-    /// Focus the next/previous window on the current workspace (bound to Alt+Tab).
+    /// Focus the next/previous window on the current workspace immediately, without the
+    /// switcher popup. For binding to a custom shortcut if you prefer instant switching.
     Switch {
         #[arg(value_enum)]
         direction: SwitchDir,
@@ -54,7 +56,7 @@ struct Parts {
     /// Don't jump to another workspace when an app there asks for focus.
     #[arg(long)]
     activation: bool,
-    /// Alt+Tab / Super+Tab cycle only the current workspace (needs the daemon).
+    /// Alt+Tab / Super+Tab switcher lists only the current workspace (needs the daemon).
     #[arg(long)]
     switcher: bool,
     /// All of the above.
@@ -77,10 +79,22 @@ impl Parts {
 }
 
 fn main() {
+    // pop-launcher runs plugins without arguments, so the plugin is selected by argv[0].
+    let as_plugin = std::env::args_os()
+        .next()
+        .and_then(|a| std::path::Path::new(&a).file_name().map(|n| n == plugin::ARGV0))
+        .unwrap_or(false);
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with_writer(std::io::stderr)
         .init();
+    if as_plugin {
+        if let Err(err) = plugin::run() {
+            error!("{err:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(err) = run(Cli::parse()) {
         error!("{err:#}");
         std::process::exit(1);
@@ -89,22 +103,13 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Cmd::Daemon { burst_ms } => {
-            let paths = cosmic_cfg::Paths::from_env()?;
-            wayland::run(wayland::Options {
-                mode: wayland::Mode::Daemon,
-                burst: Duration::from_millis(burst_ms),
-                on_tick: Some(Box::new(move || {
-                    if let Err(err) = cosmic_cfg::ensure_switcher(&paths) {
-                        error!("checking Alt+Tab binding: {err:#}");
-                    }
-                })),
-            })
-        }
+        Cmd::Daemon { burst_ms } => wayland::run(wayland::Options {
+            mode: wayland::Mode::Daemon,
+            burst: Duration::from_millis(burst_ms),
+        }),
         Cmd::Watch => wayland::run(wayland::Options {
             mode: wayland::Mode::Watch,
             burst: Duration::ZERO,
-            on_tick: None,
         }),
         Cmd::Switch { direction } => ipc::switch(match direction {
             SwitchDir::Next => "next",
@@ -126,10 +131,11 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 if ipc::request("status").is_err() {
                     tracing::warn!(
-                        "daemon is not running; Alt+Tab will use the stock switcher until it starts"
+                        "daemon is not running; the switcher lists all windows until it starts"
                     );
                 }
                 cosmic_cfg::apply_switcher(&paths, &exe)?;
+                restart_pop_launcher();
             }
             if dock {
                 cosmic_cfg::apply_key(&paths, &cosmic_cfg::DOCK)?;
@@ -144,6 +150,7 @@ fn run(cli: Cli) -> Result<()> {
             let paths = cosmic_cfg::Paths::from_env()?;
             if switcher {
                 cosmic_cfg::restore_switcher(&paths)?;
+                restart_pop_launcher();
             }
             if dock {
                 cosmic_cfg::restore_key(&paths, &cosmic_cfg::DOCK)?;
@@ -153,5 +160,23 @@ fn run(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+/// pop-launcher reads plugins once at start. cosmic-launcher starts a fresh one on the next
+/// search when it exits (cosmic-launcher 0adec45, `Event::ServiceIsClosed`), so stopping it
+/// is enough; the launcher itself and the session keep running.
+fn restart_pop_launcher() {
+    let mut cmd = std::process::Command::new("pkill");
+    cmd.arg("-x");
+    if let Ok(user) = std::env::var("USER") {
+        cmd.args(["-u", &user]);
+    }
+    match cmd.arg("pop-launcher").status() {
+        Ok(status) if status.success() => {
+            tracing::info!("restarted pop-launcher; the next Alt+Tab loads the change")
+        }
+        Ok(_) => tracing::info!("pop-launcher was not running; it loads the change when it starts"),
+        Err(err) => tracing::warn!("could not restart pop-launcher ({err}); log out to apply"),
     }
 }

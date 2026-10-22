@@ -48,6 +48,8 @@ pub const SWITCHER_PREV: &str = "WindowSwitcherPrevious";
 pub struct Paths {
     pub config_home: PathBuf,
     pub backup_dir: PathBuf,
+    /// pop-launcher's user plugin directory (it hard-codes ~/.local/share/pop-launcher/plugins).
+    pub launcher_plugins: PathBuf,
 }
 
 impl Paths {
@@ -62,6 +64,10 @@ impl Paths {
         Ok(Self {
             config_home: xdg("XDG_CONFIG_HOME", ".config")?,
             backup_dir: xdg("XDG_STATE_HOME", ".local/state")?.join("cosmic-ws-isolate/backup"),
+            launcher_plugins: home
+                .clone()
+                .context("HOME is not set")?
+                .join(".local/share/pop-launcher/plugins"),
         })
     }
 
@@ -73,8 +79,8 @@ impl Paths {
         self.backup_dir.join(format!("{id}.{key}.{ext}"))
     }
 
-    fn switcher_exe_file(&self) -> PathBuf {
-        self.backup_dir.join("switcher-exe")
+    fn plugin_dir(&self) -> PathBuf {
+        self.launcher_plugins.join("cosmic-ws-isolate")
     }
 }
 
@@ -220,29 +226,22 @@ fn format_actions(map: &ActionMap) -> Result<String> {
     Ok(out)
 }
 
-/// The command runs through `/bin/sh -c`. Only plain paths are accepted so the string
-/// needs no shell quoting or RON escapes.
-fn check_exe_path(exe: &str) -> Result<()> {
-    let plain = exe.starts_with('/')
-        && exe
+/// Paths end up inside RON strings and shell commands; only plain ones are accepted so
+/// neither needs quoting or escapes.
+fn check_plain_path(path: &str) -> Result<()> {
+    let plain = path.starts_with('/')
+        && path
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c));
     if !plain {
-        bail!("executable path {exe:?} must be absolute and contain only [A-Za-z0-9/._-+]");
+        bail!("path {path:?} must be absolute and contain only [A-Za-z0-9/._-+]");
     }
     Ok(())
 }
 
-/// Matches commands written by any version of this program, wherever it was installed.
+/// Matches Alt+Tab commands written by any earlier version of this program.
 fn is_our_command(cmd: &str) -> bool {
     cmd.contains("cosmic-ws-isolate") && cmd.contains(" switch ")
-}
-
-fn switcher_commands(exe: &str) -> [(Ident, String); 2] {
-    [
-        (Ident(SWITCHER_NEXT.into()), format!("{exe} switch next")),
-        (Ident(SWITCHER_PREV.into()), format!("{exe} switch prev")),
-    ]
 }
 
 fn read_actions(path: &Path) -> Result<ActionMap> {
@@ -261,74 +260,83 @@ fn write_actions(path: &Path, map: &ActionMap) -> Result<()> {
     write_atomic(path, &text)
 }
 
-/// Points Alt+Tab / Super+Tab (and the Shift variants) at `exe switch next|prev`.
-/// Only our two keys are written; COSMIC merges the user file over the system map.
-pub fn apply_switcher(paths: &Paths, exe: &str) -> Result<()> {
-    let path = paths.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
-    // Parse before taking a backup or writing: if the existing file is unreadable, touch nothing.
-    check_exe_path(exe)?;
-    let mut map = read_actions(&path)?;
-    backup_once(paths, SHORTCUTS_ID, SYSTEM_ACTIONS)?;
-    map.extend(switcher_commands(exe));
-    write_actions(&path, &map)?;
-    write_atomic(&paths.switcher_exe_file(), exe)?;
-    info!("switcher: Alt+Tab now runs {exe} switch next|prev");
-    Ok(())
-}
-
-/// Re-adds our keys if something (e.g. cosmic-settings changing the default terminal) dropped them.
-/// Does nothing unless the switcher was applied. Returns true if the file was rewritten.
-pub fn ensure_switcher(paths: &Paths) -> Result<bool> {
-    let Some(exe) = read_optional(&paths.switcher_exe_file())? else {
-        return Ok(false);
-    };
-    let path = paths.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
-    let mut map = read_actions(&path)?;
-    let wanted = switcher_commands(&exe);
-    if wanted.iter().all(|(k, v)| map.get(k) == Some(v)) {
-        return Ok(false);
-    }
-    map.extend(wanted);
-    write_actions(&path, &map)?;
-    warn!("switcher: system_actions lost our entries; re-applied");
-    Ok(true)
-}
-
-pub fn restore_switcher(paths: &Paths) -> Result<()> {
+/// Removes the Alt+Tab -> `cosmic-ws-isolate switch` binding that earlier versions put in
+/// `system_actions`, so Alt+Tab runs the stock cosmic-launcher switcher again.
+/// Entries the user or cosmic-settings added are kept; the file is deleted only if it
+/// didn't exist before and nothing else is left in it.
+fn remove_legacy_binding(paths: &Paths) -> Result<()> {
     let path = paths.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
     let backup = read_backup(paths, SHORTCUTS_ID, SYSTEM_ACTIONS)?;
-    let exe = read_optional(&paths.switcher_exe_file())?;
-    if matches!(backup, Backup::None) && exe.is_none() {
-        info!("switcher: nothing to restore");
-        return Ok(());
-    }
+    let exe_file = paths.backup_dir.join("switcher-exe");
+    let mut map = read_actions(&path)?;
     let original = match &backup {
         Backup::Original(text) => parse_actions(text)?,
         _ => ActionMap::new(),
     };
-    let mut map = read_actions(&path)?;
+    let mut changed = false;
     for name in [SWITCHER_NEXT, SWITCHER_PREV] {
         let key = Ident(name.into());
         if !map.get(&key).is_some_and(|cmd| is_our_command(cmd)) {
             continue;
         }
+        changed = true;
         match original.get(&key) {
             Some(orig) => map.insert(key, orig.clone()),
             None => map.remove(&key),
         };
     }
-    if map.is_empty() && matches!(backup, Backup::Absent) {
-        if path.exists() {
+    if changed {
+        if map.is_empty() && !matches!(backup, Backup::Original(_)) {
             fs::remove_file(&path)?;
+        } else {
+            write_actions(&path, &map)?;
         }
-    } else {
-        write_actions(&path, &map)?;
+        info!("switcher: removed the old Alt+Tab binding from {}", path.display());
     }
     clear_backup(paths, SHORTCUTS_ID, SYSTEM_ACTIONS)?;
-    if exe.is_some() {
-        fs::remove_file(paths.switcher_exe_file())?;
+    if exe_file.exists() {
+        fs::remove_file(exe_file)?;
     }
-    info!("switcher: restored {}", path.display());
+    Ok(())
+}
+
+/// Installs the launcher plugin that makes cosmic-launcher's Alt+Tab view per-workspace.
+/// A symlink named [`plugin::ARGV0`] points at `exe`; `main` dispatches on that name.
+pub fn apply_switcher(paths: &Paths, exe: &str) -> Result<()> {
+    check_plain_path(exe)?;
+    let dir = paths.plugin_dir();
+    let link = dir.join(crate::plugin::ARGV0);
+    let link_str = link.to_str().context("plugin path is not UTF-8")?;
+    check_plain_path(link_str)?;
+    // Parses system_actions first: if it's unreadable we stop before changing anything.
+    remove_legacy_binding(paths)?;
+
+    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let tmp_link = dir.join(format!(".{}.tmp", crate::plugin::ARGV0));
+    let _ = fs::remove_file(&tmp_link);
+    std::os::unix::fs::symlink(exe, &tmp_link)?;
+    fs::rename(&tmp_link, &link)?;
+    write_atomic(&dir.join("plugin.ron"), &crate::plugin::plugin_ron(link_str))?;
+    info!("switcher: installed launcher plugin in {}", dir.display());
+    Ok(())
+}
+
+pub fn restore_switcher(paths: &Paths) -> Result<()> {
+    remove_legacy_binding(paths)?;
+    let dir = paths.plugin_dir();
+    for name in ["plugin.ron", crate::plugin::ARGV0] {
+        let file = dir.join(name);
+        if file.symlink_metadata().is_ok() {
+            fs::remove_file(&file)?;
+        }
+    }
+    if dir.exists() {
+        // Only succeeds if empty, so nothing else is ever deleted.
+        if let Err(err) = fs::remove_dir(&dir) {
+            warn!("leaving {}: {err}", dir.display());
+        }
+    }
+    info!("switcher: launcher plugin removed; Alt+Tab is the stock switcher again");
     Ok(())
 }
 
@@ -337,10 +345,13 @@ mod tests {
     use super::*;
 
     fn paths(dir: &Path) -> Paths {
-        Paths {
+        let p = Paths {
             config_home: dir.join("config"),
             backup_dir: dir.join("state/backup"),
-        }
+            launcher_plugins: dir.join("share/pop-launcher/plugins"),
+        };
+        fs::create_dir_all(&p.launcher_plugins).unwrap();
+        p
     }
 
     #[test]
@@ -397,81 +408,104 @@ mod tests {
         assert_eq!(fs::read_to_string(&file).unwrap(), "Urgent");
     }
 
-    #[test]
-    fn switcher_round_trip_from_absent() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = paths(dir.path());
-        let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
-        apply_switcher(&p, "/home/u/.local/bin/cosmic-ws-isolate").unwrap();
-        let map = parse_actions(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(
-            map[&Ident(SWITCHER_NEXT.into())],
-            "/home/u/.local/bin/cosmic-ws-isolate switch next"
-        );
-        assert_eq!(map.len(), 2);
-        restore_switcher(&p).unwrap();
-        assert!(!file.exists());
-    }
-
-    #[test]
-    fn switcher_keeps_other_entries_and_reapplies() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = paths(dir.path());
-        let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
-        write_atomic(&file, "{ Terminal: \"kitty\" }").unwrap();
-        apply_switcher(&p, "/x/bin/cosmic-ws-isolate").unwrap();
-        assert!(!ensure_switcher(&p).unwrap());
-
-        // cosmic-settings rewrites the file with only its own entry.
-        write_atomic(&file, "{\n    Terminal: \"alacritty\",\n}").unwrap();
-        assert!(ensure_switcher(&p).unwrap());
-        let map = parse_actions(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(map.len(), 3);
-        assert_eq!(map[&Ident(SWITCHER_PREV.into())], "/x/bin/cosmic-ws-isolate switch prev");
-
-        restore_switcher(&p).unwrap();
-        let map = parse_actions(&fs::read_to_string(&file).unwrap()).unwrap();
-        // The later Terminal change survives; our keys are gone.
-        assert_eq!(map.len(), 1);
-        assert_eq!(map[&Ident("Terminal".into())], "alacritty");
-        assert!(!ensure_switcher(&p).unwrap());
-    }
-
-    #[test]
-    fn restore_removes_entries_from_older_versions() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = paths(dir.path());
-        let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
-        apply_switcher(&p, "/new/cosmic-ws-isolate").unwrap();
+    fn legacy_binding(p: &Paths, file: &Path, other: &str) {
+        // What the previous version wrote: backup marker, exe record and the two entries.
+        fs::create_dir_all(&p.backup_dir).unwrap();
+        write_atomic(&p.backup(SHORTCUTS_ID, SYSTEM_ACTIONS, "absent"), "").unwrap();
+        write_atomic(&p.backup_dir.join("switcher-exe"), "/x/cosmic-ws-isolate").unwrap();
         write_atomic(
-            &file,
-            "{ WindowSwitcher: \"'/old/cosmic-ws-isolate' switch next\", Terminal: \"kitty\" }",
+            file,
+            &format!(
+                "{{ {other} WindowSwitcher: \"/x/cosmic-ws-isolate switch next\", \
+                 WindowSwitcherPrevious: \"'/old/cosmic-ws-isolate' switch prev\" }}"
+            ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn switcher_installs_plugin_and_removes_legacy_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
+        legacy_binding(&p, &file, "");
+
+        apply_switcher(&p, "/home/u/.local/bin/cosmic-ws-isolate").unwrap();
+        assert!(!file.exists(), "file did not exist before the old apply");
+        let ron = fs::read_to_string(p.plugin_dir().join("plugin.ron")).unwrap();
+        assert!(ron.contains(r#"name: "COSMIC Windows""#));
+        let link = p.plugin_dir().join(crate::plugin::ARGV0);
+        assert!(ron.contains(link.to_str().unwrap()));
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            PathBuf::from("/home/u/.local/bin/cosmic-ws-isolate")
+        );
+        // Re-apply is fine.
+        apply_switcher(&p, "/home/u/.local/bin/cosmic-ws-isolate").unwrap();
+
+        restore_switcher(&p).unwrap();
+        assert!(!p.plugin_dir().exists());
+        assert!(p.launcher_plugins.exists(), "parent plugin dir is left alone");
+    }
+
+    #[test]
+    fn legacy_removal_keeps_other_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
+        legacy_binding(&p, &file, "Terminal: \"alacritty\",");
         restore_switcher(&p).unwrap();
         let map = parse_actions(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(map.len(), 1);
-        assert!(map.contains_key(&Ident("Terminal".into())));
+        assert_eq!(map[&Ident("Terminal".into())], "alacritty");
+        assert!(!p.backup_dir.join("switcher-exe").exists());
+    }
+
+    #[test]
+    fn legacy_removal_restores_original_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
+        fs::create_dir_all(&p.backup_dir).unwrap();
+        write_atomic(
+            &p.backup(SHORTCUTS_ID, SYSTEM_ACTIONS, "orig"),
+            "{ WindowSwitcher: \"my-switcher\" }",
+        )
+        .unwrap();
+        write_atomic(&file, "{ WindowSwitcher: \"/x/cosmic-ws-isolate switch next\" }").unwrap();
+        restore_switcher(&p).unwrap();
+        let map = parse_actions(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(map[&Ident(SWITCHER_NEXT.into())], "my-switcher");
+    }
+
+    #[test]
+    fn restore_never_deletes_foreign_plugin_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = paths(dir.path());
+        apply_switcher(&p, "/x/cosmic-ws-isolate").unwrap();
+        write_atomic(&p.plugin_dir().join("notes.txt"), "mine").unwrap();
+        restore_switcher(&p).unwrap();
+        assert!(p.plugin_dir().join("notes.txt").exists());
     }
 
     #[test]
     fn switcher_refuses_unusual_paths() {
         let dir = tempfile::tempdir().unwrap();
         let p = paths(dir.path());
-        for bad in ["relative/bin", "/home/a b/bin", "/x/it's", "/x/$(rm)"] {
+        for bad in ["relative/bin", "/home/a b/bin", "/x/it's", "/x/$(rm)", "/x/\"q"] {
             assert!(apply_switcher(&p, bad).is_err(), "{bad}");
         }
-        assert!(!p.backup_dir.exists());
+        assert!(!p.plugin_dir().exists());
     }
 
     #[test]
-    fn switcher_refuses_unparseable_file() {
+    fn switcher_refuses_unparseable_system_actions() {
         let dir = tempfile::tempdir().unwrap();
         let p = paths(dir.path());
         let file = p.cosmic_file(SHORTCUTS_ID, SYSTEM_ACTIONS);
         write_atomic(&file, "{ oops").unwrap();
-        assert!(apply_switcher(&p, "/x").is_err());
+        assert!(apply_switcher(&p, "/x/cosmic-ws-isolate").is_err());
         assert_eq!(fs::read_to_string(&file).unwrap(), "{ oops");
-        assert!(!p.backup_dir.join("switcher-exe").exists());
+        assert!(!p.plugin_dir().exists());
     }
 }

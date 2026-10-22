@@ -9,6 +9,10 @@ license = "GPL-3.0-only"
 # Pinned to the rev the installed cosmic-app-list (cosmic-applets 8981b0b) is built with,
 # so the protocol bindings match the running compositor.
 cctk = { git = "https://github.com/pop-os/cosmic-protocols", package = "cosmic-client-toolkit", rev = "c253ec1d6804afbcdf250f5cc37ae1194bba7bd2" }
+# Plugin protocol types, pinned to the installed pop-launcher (1.2.6, 5b86851).
+pop-launcher = { git = "https://github.com/pop-os/launcher", rev = "5b868510716673b31a650488401489898352e2d9" }
+# Same desktop-entry lookup the stock cosmic_toplevel plugin uses.
+freedesktop-desktop-entry = "0.7.19"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ron = "0.12"

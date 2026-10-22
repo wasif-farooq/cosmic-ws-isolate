@@ -68,7 +68,7 @@ impl<K: Clone + PartialEq, W: Clone + PartialEq> Switcher<K, W> {
     }
 
     /// Candidates ordered by focus history; never-focused windows keep their given order at the end.
-    fn ordered(&self, candidates: &[Candidate<K>]) -> Vec<K> {
+    pub fn ordered(&self, candidates: &[Candidate<K>]) -> Vec<K> {
         let mut order: Vec<K> = self
             .mru
             .iter()
