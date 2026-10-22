@@ -37,7 +37,8 @@ pub fn serve(forward: impl Fn(Request) -> bool + Send + 'static) -> Result<()> {
         }
         std::fs::remove_file(&path)?;
     }
-    let listener = UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
+    let listener =
+        UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
     thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
@@ -71,7 +72,8 @@ fn handle(stream: UnixStream, forward: &impl Fn(Request) -> bool) -> Result<()> 
 
 pub fn request(line: &str) -> Result<String> {
     let path = socket_path()?;
-    let stream = UnixStream::connect(&path).with_context(|| format!("connecting to {}", path.display()))?;
+    let stream =
+        UnixStream::connect(&path).with_context(|| format!("connecting to {}", path.display()))?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_millis(500)))?;
     (&stream).write_all(format!("{line}\n").as_bytes())?;
@@ -94,7 +96,11 @@ pub fn switch(dir: &str) -> Result<()> {
         }
         Err(err) => {
             warn!("daemon unavailable ({err:#}); falling back to cosmic-launcher");
-            let arg = if dir == "prev" { "shift-alt-tab" } else { "alt-tab" };
+            let arg = if dir == "prev" {
+                "shift-alt-tab"
+            } else {
+                "alt-tab"
+            };
             // exec keeps XDG_ACTIVATION_TOKEN and friends from cosmic-comp.
             let err = Command::new("cosmic-launcher").arg(arg).exec();
             Err(err).context("running cosmic-launcher")

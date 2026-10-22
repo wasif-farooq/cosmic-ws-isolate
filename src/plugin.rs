@@ -91,7 +91,10 @@ pub fn run() -> Result<()> {
             Request::Search(query) => match fetch(&query) {
                 Ok(windows) => {
                     for w in windows {
-                        send(&mut out, &PluginResponse::Append(search_result(&w, &entries, &locales)))?;
+                        send(
+                            &mut out,
+                            &PluginResponse::Append(search_result(&w, &entries, &locales)),
+                        )?;
                     }
                     send(&mut out, &PluginResponse::Finished)?;
                 }
@@ -121,7 +124,11 @@ fn forward(command: &str) {
 
 /// Built like the stock plugin's results, so the switcher looks the same: cosmic-launcher
 /// shows `description` (the window title) as the main line for window results.
-fn search_result(w: &ListedWindow, entries: &[DesktopEntry], locales: &[String]) -> PluginSearchResult {
+fn search_result(
+    w: &ListedWindow,
+    entries: &[DesktopEntry],
+    locales: &[String],
+) -> PluginSearchResult {
     let appid = fde::unicase::Ascii::new(w.app_id.as_str());
     let entry = fde::find_app_by_id(entries, appid)
         .cloned()

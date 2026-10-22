@@ -16,21 +16,17 @@ use cctk::{
     sctk::{
         self,
         output::{OutputHandler, OutputState},
-        reexports::{
-            calloop,
-            calloop_wayland_source::WaylandSource,
-        },
+        reexports::{calloop, calloop_wayland_source::WaylandSource},
         registry::{ProvidesRegistryState, RegistryState},
         seat::{Capability, SeatHandler, SeatState},
     },
     toplevel_info::{ToplevelInfo, ToplevelInfoHandler, ToplevelInfoState},
     toplevel_management::{ToplevelManagerHandler, ToplevelManagerState},
     wayland_client::{
-        Connection, QueueHandle, WEnum,
+        Connection, Proxy, QueueHandle, WEnum,
         backend::ObjectId,
         globals::registry_queue_init,
         protocol::{wl_output::WlOutput, wl_seat::WlSeat},
-        Proxy,
     },
     wayland_protocols::ext::{
         foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
@@ -162,7 +158,11 @@ impl App {
                 });
             }
         }
-        let known: Vec<_> = self.workspace_state.workspaces().map(|w| w.handle.clone()).collect();
+        let known: Vec<_> = self
+            .workspace_state
+            .workspaces()
+            .map(|w| w.handle.clone())
+            .collect();
         let other_windows = self
             .toplevel_info_state
             .toplevels()
@@ -181,7 +181,13 @@ impl App {
         for ws in &snap.workspaces {
             out += &format!(
                 "{} workspace {:?} on {}{}\n",
-                if ws.current { "▶" } else if ws.active { "•" } else { " " },
+                if ws.current {
+                    "▶"
+                } else if ws.active {
+                    "•"
+                } else {
+                    " "
+                },
                 ws.name,
                 ws.outputs.join(","),
                 if ws.active { " (active)" } else { "" },
@@ -212,7 +218,10 @@ impl App {
                 focused: t.state.contains(&ToplevelState::Activated),
             })
             .collect();
-        let Some(key) = self.switcher.pick(Instant::now(), dir, &ws.id(), &candidates) else {
+        let Some(key) = self
+            .switcher
+            .pick(Instant::now(), dir, &ws.id(), &candidates)
+        else {
             return Ok("ok nothing to switch to".into());
         };
         self.activate(&key)
@@ -303,14 +312,23 @@ impl App {
             "list" => serde_json::to_string(&self.list("")).map_err(Into::into),
             other => {
                 let (cmd, arg) = other.split_once(' ').unwrap_or((other, ""));
-                let id = || arg.parse::<u32>().with_context(|| format!("bad window id {arg:?}"));
+                let id = || {
+                    arg.parse::<u32>()
+                        .with_context(|| format!("bad window id {arg:?}"))
+                };
                 match cmd {
                     "list" => serde_json::to_string(&self.list(arg)).map_err(Into::into),
                     "activate" => id().and_then(|id| {
-                        self.act(|t| t.foreign_toplevel.id().protocol_id() == id, Action::Activate)
+                        self.act(
+                            |t| t.foreign_toplevel.id().protocol_id() == id,
+                            Action::Activate,
+                        )
                     }),
                     "close" => id().and_then(|id| {
-                        self.act(|t| t.foreign_toplevel.id().protocol_id() == id, Action::Close)
+                        self.act(
+                            |t| t.foreign_toplevel.id().protocol_id() == id,
+                            Action::Close,
+                        )
                     }),
                     _ => Err(anyhow!("unknown command {other:?}")),
                 }
@@ -359,7 +377,9 @@ pub fn run(opts: Options) -> Result<()> {
     let toplevel_info_state = ToplevelInfoState::try_new(&registry_state, &qh)
         .context("compositor does not offer ext-foreign-toplevel-list")?;
     if toplevel_info_state.cosmic_toplevel_info.is_none() {
-        return Err(anyhow!("compositor does not offer zcosmic-toplevel-info v2+"));
+        return Err(anyhow!(
+            "compositor does not offer zcosmic-toplevel-info v2+"
+        ));
     }
     let toplevel_manager_state = match opts.mode {
         Mode::Watch => None,
@@ -436,7 +456,13 @@ impl SeatHandler for App {
     }
     fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat) {}
     fn new_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat, _: Capability) {}
-    fn remove_capability(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat, _: Capability) {
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: WlSeat,
+        _: Capability,
+    ) {
     }
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: WlSeat) {}
 }
@@ -454,13 +480,28 @@ impl ToplevelInfoHandler for App {
     fn toplevel_info_state(&mut self) -> &mut ToplevelInfoState {
         &mut self.toplevel_info_state
     }
-    fn new_toplevel(&mut self, _: &Connection, _: &QueueHandle<Self>, toplevel: &ExtForeignToplevelHandleV1) {
+    fn new_toplevel(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        toplevel: &ExtForeignToplevelHandleV1,
+    ) {
         self.track_focus(toplevel);
     }
-    fn update_toplevel(&mut self, _: &Connection, _: &QueueHandle<Self>, toplevel: &ExtForeignToplevelHandleV1) {
+    fn update_toplevel(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        toplevel: &ExtForeignToplevelHandleV1,
+    ) {
         self.track_focus(toplevel);
     }
-    fn toplevel_closed(&mut self, _: &Connection, _: &QueueHandle<Self>, toplevel: &ExtForeignToplevelHandleV1) {
+    fn toplevel_closed(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        toplevel: &ExtForeignToplevelHandleV1,
+    ) {
         if let Some(info) = self.toplevel_info_state.info(toplevel) {
             let id = info.identifier.clone();
             self.switcher.forget(&id);
@@ -481,7 +522,9 @@ impl ToplevelManagerHandler for App {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        capabilities: Vec<WEnum<zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1>>,
+        capabilities: Vec<
+            WEnum<zcosmic_toplevel_manager_v1::ZcosmicToplelevelManagementCapabilitiesV1>,
+        >,
     ) {
         let can_activate = capabilities.iter().any(|c| {
             matches!(

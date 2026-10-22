@@ -2,6 +2,7 @@
 name = "cosmic-ws-isolate"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Per-workspace dock and Alt+Tab for the COSMIC desktop"
 license = "GPL-3.0-only"
 

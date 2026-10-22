@@ -21,7 +21,10 @@ pub struct Candidate<K> {
 /// workspaces). `focused_on` are the workspaces of the focused window, if any.
 /// Returns `None` when the answer is ambiguous, so we never cycle windows on
 /// a monitor the user is not looking at.
-pub fn current_workspace<W: Clone + PartialEq>(active: &[W], focused_on: Option<&[W]>) -> Option<W> {
+pub fn current_workspace<W: Clone + PartialEq>(
+    active: &[W],
+    focused_on: Option<&[W]>,
+) -> Option<W> {
     if let Some(ws) = focused_on.and_then(|on| on.iter().find(|w| active.contains(w))) {
         return Some(ws.clone());
     }
@@ -103,7 +106,9 @@ impl<K: Clone + PartialEq, W: Clone + PartialEq> Switcher<K, W> {
         if in_burst {
             let burst = self.burst.as_mut().unwrap();
             // Drop windows that closed or left the workspace mid-burst.
-            burst.order.retain(|k| candidates.iter().any(|c| &c.key == k));
+            burst
+                .order
+                .retain(|k| candidates.iter().any(|c| &c.key == k));
             if !burst.order.is_empty() {
                 let len = burst.order.len();
                 burst.index = step(burst.index.min(len - 1), dir, len);
@@ -191,10 +196,16 @@ mod tests {
             s.note_focused(&k);
         }
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Next, &1, &cands(&["a", "b", "c"], "c")), Some("b"));
+        assert_eq!(
+            s.pick(t, Direction::Next, &1, &cands(&["a", "b", "c"], "c")),
+            Some("b")
+        );
         s.note_focused(&"b");
         let later = t + Duration::from_secs(2);
-        assert_eq!(s.pick(later, Direction::Next, &1, &cands(&["a", "b", "c"], "b")), Some("c"));
+        assert_eq!(
+            s.pick(later, Direction::Next, &1, &cands(&["a", "b", "c"], "b")),
+            Some("c")
+        );
     }
 
     #[test]
@@ -204,16 +215,28 @@ mod tests {
             s.note_focused(&k);
         }
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Next, &1, &cands(&["a", "b", "c"], "c")), Some("b"));
+        assert_eq!(
+            s.pick(t, Direction::Next, &1, &cands(&["a", "b", "c"], "c")),
+            Some("b")
+        );
         // Activation updates MRU, but the burst keeps the original order.
         s.note_focused(&"b");
         let t2 = t + Duration::from_millis(300);
-        assert_eq!(s.pick(t2, Direction::Next, &1, &cands(&["a", "b", "c"], "b")), Some("a"));
+        assert_eq!(
+            s.pick(t2, Direction::Next, &1, &cands(&["a", "b", "c"], "b")),
+            Some("a")
+        );
         s.note_focused(&"a");
         let t3 = t2 + Duration::from_millis(300);
-        assert_eq!(s.pick(t3, Direction::Next, &1, &cands(&["a", "b", "c"], "a")), Some("c"));
+        assert_eq!(
+            s.pick(t3, Direction::Next, &1, &cands(&["a", "b", "c"], "a")),
+            Some("c")
+        );
         let t4 = t3 + Duration::from_millis(300);
-        assert_eq!(s.pick(t4, Direction::Prev, &1, &cands(&["a", "b", "c"], "c")), Some("a"));
+        assert_eq!(
+            s.pick(t4, Direction::Prev, &1, &cands(&["a", "b", "c"], "c")),
+            Some("a")
+        );
     }
 
     #[test]
@@ -223,7 +246,10 @@ mod tests {
             s.note_focused(&k);
         }
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Prev, &1, &cands(&["a", "b", "c"], "c")), Some("a"));
+        assert_eq!(
+            s.pick(t, Direction::Prev, &1, &cands(&["a", "b", "c"], "c")),
+            Some("a")
+        );
     }
 
     #[test]
@@ -233,9 +259,15 @@ mod tests {
             s.note_focused(&k);
         }
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Next, &1, &cands(&["a", "b"], "b")), Some("a"));
+        assert_eq!(
+            s.pick(t, Direction::Next, &1, &cands(&["a", "b"], "b")),
+            Some("a")
+        );
         let t2 = t + Duration::from_millis(100);
-        assert_eq!(s.pick(t2, Direction::Next, &2, &cands(&["x", "y"], "y")), Some("x"));
+        assert_eq!(
+            s.pick(t2, Direction::Next, &2, &cands(&["x", "y"], "y")),
+            Some("x")
+        );
     }
 
     #[test]
@@ -245,11 +277,17 @@ mod tests {
             s.note_focused(&k);
         }
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Next, &1, &cands(&["a", "b", "c"], "c")), Some("b"));
+        assert_eq!(
+            s.pick(t, Direction::Next, &1, &cands(&["a", "b", "c"], "c")),
+            Some("b")
+        );
         s.forget(&"a");
         let t2 = t + Duration::from_millis(100);
         // order was [c, b, a] -> a closed -> [c, b]; index 1 -> next wraps to c
-        assert_eq!(s.pick(t2, Direction::Next, &1, &cands(&["b", "c"], "b")), Some("c"));
+        assert_eq!(
+            s.pick(t2, Direction::Next, &1, &cands(&["b", "c"], "b")),
+            Some("c")
+        );
     }
 
     #[test]
@@ -266,9 +304,15 @@ mod tests {
         s.note_focused(&"a");
         s.note_focused(&"b");
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Next, &1, &cands(&["a", "b"], "")), Some("b"));
+        assert_eq!(
+            s.pick(t, Direction::Next, &1, &cands(&["a", "b"], "")),
+            Some("b")
+        );
         let mut s2: Switcher<&str, i32> = Switcher::new(BURST);
-        assert_eq!(s2.pick(t, Direction::Next, &1, &cands(&["a"], "")), Some("a"));
+        assert_eq!(
+            s2.pick(t, Direction::Next, &1, &cands(&["a"], "")),
+            Some("a")
+        );
     }
 
     #[test]
@@ -276,6 +320,9 @@ mod tests {
         let mut s = Switcher::new(BURST);
         s.note_focused(&"b");
         let t = Instant::now();
-        assert_eq!(s.pick(t, Direction::Prev, &1, &cands(&["a", "b", "z"], "b")), Some("z"));
+        assert_eq!(
+            s.pick(t, Direction::Prev, &1, &cands(&["a", "b", "z"], "b")),
+            Some("z")
+        );
     }
 }

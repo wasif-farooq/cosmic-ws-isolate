@@ -82,10 +82,16 @@ fn main() {
     // pop-launcher runs plugins without arguments, so the plugin is selected by argv[0].
     let as_plugin = std::env::args_os()
         .next()
-        .and_then(|a| std::path::Path::new(&a).file_name().map(|n| n == plugin::ARGV0))
+        .and_then(|a| {
+            std::path::Path::new(&a)
+                .file_name()
+                .map(|n| n == plugin::ARGV0)
+        })
         .unwrap_or(false);
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_writer(std::io::stderr)
         .init();
     if as_plugin {
@@ -125,7 +131,10 @@ fn run(cli: Cli) -> Result<()> {
             if switcher {
                 // Check everything that could fail before touching any file.
                 let exe = std::env::current_exe()?.canonicalize()?;
-                let exe = exe.to_str().context("executable path is not UTF-8")?.to_owned();
+                let exe = exe
+                    .to_str()
+                    .context("executable path is not UTF-8")?
+                    .to_owned();
                 if exe.contains("/target/") {
                     tracing::warn!("binding Alt+Tab to a build-directory binary: {exe}");
                 }

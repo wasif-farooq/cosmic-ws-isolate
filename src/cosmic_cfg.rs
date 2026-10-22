@@ -72,7 +72,11 @@ impl Paths {
     }
 
     fn cosmic_file(&self, id: &str, key: &str) -> PathBuf {
-        self.config_home.join("cosmic").join(id).join("v1").join(key)
+        self.config_home
+            .join("cosmic")
+            .join(id)
+            .join("v1")
+            .join(key)
     }
 
     fn backup(&self, id: &str, key: &str, ext: &str) -> PathBuf {
@@ -291,7 +295,10 @@ fn remove_legacy_binding(paths: &Paths) -> Result<()> {
         } else {
             write_actions(&path, &map)?;
         }
-        info!("switcher: removed the old Alt+Tab binding from {}", path.display());
+        info!(
+            "switcher: removed the old Alt+Tab binding from {}",
+            path.display()
+        );
     }
     clear_backup(paths, SHORTCUTS_ID, SYSTEM_ACTIONS)?;
     if exe_file.exists() {
@@ -316,7 +323,10 @@ pub fn apply_switcher(paths: &Paths, exe: &str) -> Result<()> {
     let _ = fs::remove_file(&tmp_link);
     std::os::unix::fs::symlink(exe, &tmp_link)?;
     fs::rename(&tmp_link, &link)?;
-    write_atomic(&dir.join("plugin.ron"), &crate::plugin::plugin_ron(link_str))?;
+    write_atomic(
+        &dir.join("plugin.ron"),
+        &crate::plugin::plugin_ron(link_str),
+    )?;
     info!("switcher: installed launcher plugin in {}", dir.display());
     Ok(())
 }
@@ -368,7 +378,10 @@ mod tests {
 }"#;
         let map = parse_actions(text).unwrap();
         assert_eq!(map.len(), 3);
-        assert_eq!(map[&Ident("WindowSwitcher".into())], "cosmic-launcher alt-tab");
+        assert_eq!(
+            map[&Ident("WindowSwitcher".into())],
+            "cosmic-launcher alt-tab"
+        );
     }
 
     #[test]
@@ -445,7 +458,10 @@ mod tests {
 
         restore_switcher(&p).unwrap();
         assert!(!p.plugin_dir().exists());
-        assert!(p.launcher_plugins.exists(), "parent plugin dir is left alone");
+        assert!(
+            p.launcher_plugins.exists(),
+            "parent plugin dir is left alone"
+        );
     }
 
     #[test]
@@ -472,7 +488,11 @@ mod tests {
             "{ WindowSwitcher: \"my-switcher\" }",
         )
         .unwrap();
-        write_atomic(&file, "{ WindowSwitcher: \"/x/cosmic-ws-isolate switch next\" }").unwrap();
+        write_atomic(
+            &file,
+            "{ WindowSwitcher: \"/x/cosmic-ws-isolate switch next\" }",
+        )
+        .unwrap();
         restore_switcher(&p).unwrap();
         let map = parse_actions(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(map[&Ident(SWITCHER_NEXT.into())], "my-switcher");
@@ -492,7 +512,13 @@ mod tests {
     fn switcher_refuses_unusual_paths() {
         let dir = tempfile::tempdir().unwrap();
         let p = paths(dir.path());
-        for bad in ["relative/bin", "/home/a b/bin", "/x/it's", "/x/$(rm)", "/x/\"q"] {
+        for bad in [
+            "relative/bin",
+            "/home/a b/bin",
+            "/x/it's",
+            "/x/$(rm)",
+            "/x/\"q",
+        ] {
             assert!(apply_switcher(&p, bad).is_err(), "{bad}");
         }
         assert!(!p.plugin_dir().exists());
