@@ -1,5 +1,7 @@
 # cosmic-ws-isolate
 
+[![CI](https://github.com/wasif-farooq/cosmic-ws-isolate/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/wasif-farooq/cosmic-ws-isolate/actions/workflows/ci.yml)
+
 Makes each COSMIC workspace its own set of apps:
 
 - **Dock** shows only windows on the current workspace (and monitor). Clicking an app that only
