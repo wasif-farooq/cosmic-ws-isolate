@@ -1,0 +1,24 @@
+[package]
+name = "cosmic-ws-isolate"
+version = "0.1.0"
+edition = "2024"
+description = "Per-workspace dock and Alt+Tab for the COSMIC desktop"
+license = "GPL-3.0-only"
+
+[dependencies]
+# Pinned to the rev the installed cosmic-app-list (cosmic-applets 8981b0b) is built with,
+# so the protocol bindings match the running compositor.
+cctk = { git = "https://github.com/pop-os/cosmic-protocols", package = "cosmic-client-toolkit", rev = "c253ec1d6804afbcdf250f5cc37ae1194bba7bd2" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
